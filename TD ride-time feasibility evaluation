@@ -1,0 +1,368 @@
+from breakpoint import getseg
+from readData import seginit
+W_bp,theta,eta,bp_tw,W_bp_arr,theta_arr,eta_arr  =  [],[],[],[],[],[],[]
+
+pickup  ,delivery  ,dis  ,num_pair   = [],[],[],0
+dict,dict2 = {},{} #breakpoint, ？B+dur
+pick,P,W_sum,pick_pos,F,LTW,ETW,num  = [],[],[],[],[],[],[],0
+#pick_pos: x请求pickup点在路径第j个位置，  pick:第x个被pick点在路径第y位置  P：x号请求的ride time      W_sum: 后缀waiting time和
+# F: forward time slack defines the maximum amount of time by which
+# the start time can be delayed at one node without causing the other nodes to violate the time windows and ride time constraints
+
+def depot_bp(tmpsol):
+    global W_bp,theta,eta,bp_tw,W_bp_arr,theta_arr,eta_arr
+    global pickup, delivery, dis, num_pair
+    global pick, P, W_sum, pick_pos, F, LTW, ETW, num
+    #print(tmpsol,len(tmpsol))
+    if str(tmpsol) in dict:
+        #print("dict",dict)
+        return dict[str(tmpsol)]
+    tmpList = [0,840]
+
+    for i in range(len(tmpsol)-2,-1,-1): #遍历路径tmpsol
+        cur_node = tmpsol[i][0]
+        next_node = tmpsol[i+1][0]
+        #print("??? ",cur_node,next_node)
+        if cur_node ==0: cur_L,cur_E = 840,0
+        elif cur_node > num_pair:
+            cur_L = delivery[cur_node - num_pair]["ltw"]
+            cur_E = delivery[cur_node - num_pair]["etw"]
+        else:
+            cur_L = pickup[cur_node]["ltw"]
+            cur_E = pickup[cur_node]["etw"]
+
+            #print("next_node",next_node,pickup[next_node]["ltw"])
+        #print(tmpList)
+        nt_L = tmpList[-1]
+        nt_E = tmpList[0]
+        LTW[next_node] = tmpList[-1]
+        ETW[next_node] = tmpList[0]
+
+        List ,flag,ins= [],0,0
+        #print("tw",cur_L,cur_E,nt_L,nt_E)
+        #第一步：i->j边i的breakpoint走一下(bp_tw)，看到了j在不在time window，在的breakpoint留下，
+        #第二步：把j点的breakpoint (List) 往回倒倒i，看在不在i的time window，在的留下，构成i的新breakpoint (List),即，下一层循环的j
+        #print("bp_tw: ",bp_tw[cur_node][next_node])
+        for j in range(len(bp_tw[cur_node][next_node])):  #枚举i->j边i的每个breakpoint
+            for k in range(1,9):
+                if W_bp[cur_node][next_node][k] > bp_tw[cur_node][next_node][j]:
+                    break
+            Tao = theta[cur_node][next_node][k-1] * bp_tw[cur_node][next_node][j] + eta[cur_node][next_node][k-1]
+            arrival_time = bp_tw[cur_node][next_node][j] + Tao
+            if arrival_time > nt_L:
+                flag = 1
+                break
+            elif arrival_time >= nt_E and arrival_time <= nt_L:
+                flag = 1
+                List.append(bp_tw[cur_node][next_node][j])
+            else:
+                ins = 1
+                lat = bp_tw[cur_node][next_node][j]
+        if flag == 0 and ins == 1:
+            List.append(lat)
+        else:
+            for j in range(len(tmpList)):
+                #print("W_Ee:",W_bp_arr[cur_node][next_node])
+                for k in range(1,9):
+                    if W_bp_arr[cur_node][next_node][k] > tmpList[j]:
+                        break
+                #print(eta_arr)
+                Tao = theta_arr[cur_node][next_node][k-1] * tmpList[j]+eta_arr[cur_node][next_node][k-1]
+                deptime = tmpList[j]-Tao
+
+                if deptime >= cur_E and deptime <= cur_L:
+                    List.append(deptime)
+        #print("tmpList", List)
+        if(len(List) == 0):
+            return []
+        List = list(set(List))
+        List.sort()
+        tmpList = List
+    if len(tmpList) != 0:
+        LTW[0] = tmpList[-1]
+        ETW[0] = tmpList[0]
+    dict[str(tmpsol)] = tmpList
+    return tmpList
+
+
+def find_dep(tmpsol,arr_t):
+    global W_bp,theta,eta,bp_tw,W_bp_arr,theta_arr,eta_arr
+    global pickup, delivery, dis, num_pair
+    global pick, P, W_sum, pick_pos, F, LTW, ETW, num
+    for i in range(len(tmpsol)-2,-1,-1):
+        cur_node = tmpsol[i][0]
+        next_node = tmpsol[i + 1][0]
+        cur_L = LTW[cur_node]
+        cur_E = ETW[cur_node]
+
+        for k in range(1, 9):
+            if W_bp_arr[cur_node][next_node][k] > arr_t:
+                break
+        Travel_t = theta_arr[cur_node][next_node][k - 1] * arr_t + eta_arr[cur_node][next_node][k - 1]
+        deptime = arr_t - Travel_t
+        arr_t = max(min(deptime,cur_L),cur_E)
+    return arr_t
+
+def Forward_slack(tmpsol,A,B,W,num):
+    #print("$$$$$$$$$$$$$$$$$$$$$$$$")
+    global W_bp,theta,eta,bp_tw,W_bp_arr,theta_arr,eta_arr
+    global pickup, delivery, dis, num_pair
+    global pick, P, W_sum, pick_pos, F, LTW, ETW
+
+    flag = 0
+    for i in range(num):
+        #print("i = ",i,pick[i],tmpsol[pick[i]][0],P[tmpsol[pick[i]][0]])
+        if P[tmpsol[pick[i]][0]] > pickup[tmpsol[pick[i]][0]]["ridetime"]:
+            flag = 1
+            #print("nonono, ", tmpsol[pick[i]][0],P[tmpsol[pick[i]][0]],pickup[tmpsol[pick[i]][0]]["ridetime"])
+            break
+    if flag == 0:
+        return True,B[2*num_pair+1]-B[0],B
+    #if W_sum == 0:
+        #return False, -1, []
+    C = B[:]
+    for x in range(num):   # all pickup nodes in  route
+        idx = pick[x]  # map to pos in [tmpsol]
+        i = tmpsol [idx] [0]   #pickup node
+        dep_i = LTW[i]
+        for j in range(idx+1,len(tmpsol)-1):
+            if tmpsol[j][0] > num_pair:
+                if pick_pos[tmpsol[j][0]-num_pair] < idx:   #j为delivery node && its pickup node before i
+                    tt = pickup [tmpsol[j][0]-num_pair] ["ridetime"] - P[tmpsol[j][0]-num_pair]
+                    DL = min(LTW[tmpsol[j][0]],tt+ B[tmpsol[j][0]])
+                else:  #j为delivery node
+                    DL = LTW[tmpsol[j][0]]
+            else:
+                DL = LTW[tmpsol[j][0]]
+            # DL 为每个点j的最晚的arrival time，反向导出i点对应的最晚departure time，取最小的。
+            ttt = tmpsol[idx:j + 1]
+            dep_i = min(dep_i,find_dep(ttt,DL))
+            #print("tmpj ", tmpsol[j][0], find_dep(ttt,DL)- B[i])
+        #print("org: ", B[i],W[i])
+        #B[i] = min(dep_i,W_sum[idx+1]+B[i])
+        B[i] = dep_i
+        W[i] = B[i]-A[i]
+        st = B[i]
+        #print("hah",i)
+        #for miao in range(len(tmpsol)):
+            #print(B[tmpsol[miao][0]],end = " ,")
+        # update A,B,W,P
+        for j in range(idx,len(tmpsol) - 1):
+            e = ETW[tmpsol[j + 1][0]]
+            cur_node, next_node = tmpsol[j][0], tmpsol[j + 1][0]
+            for k in range(1, 9):
+                if W_bp[cur_node][next_node][k] > st: break
+            Tao = theta[cur_node][next_node][k - 1] * st + eta[cur_node][next_node][k - 1]
+            #if next_node == 32 and st == 148.8374022517163:
+             #   print('\n',"???")
+              #  print("Tao:",cur_node,Tao,st)
+            #if Tao + st > l:  不存在，
+            A[tmpsol[j + 1][0]] = st + Tao
+            if Tao + st < e:
+                B[tmpsol[j + 1][0]] = e
+                W[tmpsol[j + 1][0]],st = e - Tao - st, e
+            else:
+                B[tmpsol[j + 1][0]] = Tao + st
+                W[tmpsol[j + 1][0]],st = 0, Tao + st
+            if tmpsol[j + 1][0] > num_pair and tmpsol[j + 1][0] != 2*num_pair+1:
+                P[tmpsol[j + 1][0] - num_pair] = B[tmpsol[j + 1][0]] - B[tmpsol[j + 1][0] - num_pair]
+
+        if P[i] > pickup[i]["ridetime"]:
+            #print("aaaaaaai",i,P[i],pickup[i]["ridetime"])
+            return False,-1,[]
+        flag = 0
+        for j in range(x+1,num):
+            #for i in range(1, num_pair + 1):
+                #if B[i] != 1000000:
+                    #print(i,i + num_pair, "  : ", B[i + num_pair] - B[i],C[i + num_pair] - C[i])
+                    #print(B[i],C[i],  B[i + num_pair],C[i+num_pair])
+            if P[tmpsol[pick[j]][0]] > pickup [tmpsol[pick[j]][0]] ["ridetime"]:
+                #print("nononono",tmpsol[pick[j]][0],P[tmpsol[pick[j]][0]],pickup[tmpsol[pick[j]][0]] ["ridetime"])
+                #print(B[2],B[7],B[32],B[15],B[27])
+                flag = 1
+                break
+        #print("B = ",B)
+        if flag == 0:
+            #print("???")
+            cur_node,next_node = 0,tmpsol[1][0]
+            for k in range(1, 9):
+                if W_bp_arr[0][next_node][k] > B[next_node]:
+                    break
+            Travel_t = theta_arr[0][next_node][k - 1] * B[next_node] + eta_arr[0][next_node][k - 1]
+            B[0] = B[next_node] - Travel_t
+            return True,B[2*num_pair+1]-B[0],B
+        #W_sum[len(tmpsol) - 1] = 0
+        #for j in range(len(tmpsol) - 2, idx, -1):
+            #W_sum[j] = W_sum[j + 1] + W[tmpsol[j][0]]
+    return False,-1,[]
+
+
+
+def best_pro(tmpsol):
+    global W_bp,theta,eta,bp_tw,W_bp_arr,theta_arr,eta_arr
+    global pickup, delivery, dis, num_pair
+    global pick, P, W_sum, pick_pos, F, LTW, ETW, num
+
+    W_bp, theta, eta, bp_tw, W_bp_arr, theta_arr, eta_arr = getseg()
+    pickup, delivery, dis, num_pair = seginit()
+    pick, P, W_sum = [-1 for _ in range(num_pair + 1)], [-1 for _ in range(num_pair + 1)], [1000000 for _ in
+                                                                                            range(2 * num_pair + 2)]
+    # pick_pos: x请求pickup点在路径第j个位置，  pick:第x个被pick点在路径第y位置  P：x号请求的ride time      W_sum: 后缀waiting time和
+    pick_pos, F = [-1 for _ in range(num_pair + 1)], [1000000 for _ in range(2 * num_pair + 2)]
+    LTW, ETW = [860 for _ in range(2 * num_pair + 2)], [0 for _ in range(2 * num_pair + 2)]
+    PP = 0
+    for i in range(1, len(tmpsol)):
+        pn = tmpsol[i][0]
+        if pn >= 1 and pn <= num_pair:
+            PP += 40 + 0.1 * dis[pn][pn + num_pair]  # print(PP)
+    # print(80 - (dis[5][15] + dis[7][17]) * 0.1)
+
+    num = len(tmpsol) / 2 - 1
+    # 不同的从仓库起始的时间中最好的profit， 通过所有breakpoint
+    curList = depot_bp(tmpsol)
+    #print("curList : ",tmpsol, curList)
+
+    pro,dur,BB = -1000000,1000000,[1000000 for _ in range(2*num_pair+2)]
+    for i in range(len(curList)):
+        st = curList[i] #A: arrival time; B:departure time; W:waiting time
+        A,W,B = [1000000 for _ in range(2*num_pair+2)],[1000000 for _ in range(2*num_pair+2)],[1000000 for _ in range(2*num_pair+2)]
+        A[0],B[0],W[0]  = st,st,0
+        flag,P,pick,cntp = 0,[-1 for _ in range(num_pair+1)],[-1 for _ in range(num_pair+1)],0
+        for j in range(len(tmpsol)-1):
+            if tmpsol[j+1][0] == 2*num_pair+1: e,l = 0,840
+            elif tmpsol[j+1][0] > num_pair:
+                e = delivery[tmpsol[j+1][0] - num_pair]["etw"]
+                l = delivery[tmpsol[j+1][0] - num_pair]["ltw"]
+            else:
+                e = pickup[tmpsol[j+1][0]]["etw"]
+                l = pickup[tmpsol[j + 1][0]]["ltw"]
+                pick_pos[tmpsol[j+1][0]] = j+1
+                pick[cntp] = j+1
+                cntp += 1
+            cur_node,next_node = tmpsol[j][0],tmpsol[j+1][0]
+            for k in range(1,9):
+                if W_bp[cur_node][next_node][k] > st:
+                    break
+            Tao = theta[cur_node][next_node][k-1] * st + eta[cur_node][next_node][k-1]
+            if Tao+st > l:
+                #print("e,l = ",tmpsol[j+1][0],e,l,j+1,Tao+st)
+                flag = 1
+                break
+            A[tmpsol[j+1][0]] = st+Tao
+            if Tao+st < e:
+                W[tmpsol[j + 1][0]] = e - Tao - st
+                st,B[tmpsol[j+1][0]] = e,e
+            else:
+                B[tmpsol[j+1][0]] = Tao+st
+                st,W[tmpsol[j+1][0]] = Tao+st,0
+            if tmpsol[j + 1][0] > num_pair and tmpsol[j + 1][0] != 2*num_pair+1:
+                #print("j = ",j,tmpsol[j+1][0])
+                P[tmpsol[j + 1][0] - num_pair] = B[tmpsol[j+1][0]] - B[tmpsol[j + 1][0] - num_pair]
+            #print(i,"  ",curList[i],st)
+        if flag == 1:
+            continue
+        #print("B",B)
+        #for i in range(1, num_pair + 1):
+          #  if B[i] != 1000000:
+         #       print(i, "  : ", B[i + num_pair] - B[i],pickup [i] ["ridetime"], B[i], i + num_pair, B[i + num_pair])
+        #ck,d1,B = Forward_slack(tmpsol,A,B,W,cntp)
+        #ck,d1 = True,B[77]-B[0]
+        #ck, d1 = True, B[2*num_pair+1] - B[0]
+        #print(i, "  ", curList[i], cntp, d1, '\n', B)
+        ck = True
+        d1 = B[2*num_pair+1]-B[0]
+        if ck == True and pro < PP- d1:   #####################################
+            #print(i, "  ",  curList[i],cntp,d1,'\n',B)
+            pro = PP -d1                     #########################
+            dur = d1
+            BB = B
+        #print(pro)
+    if pro == -1000000:
+        #dict2[str(tmpsol)] = [False,pro,dur]
+        return False,pro,dur
+    #dict2[str(tmpsol)] = [True,pro,dur]
+    print(BB)
+
+    print("profit:  ",pro,"   duration:  ",dur)
+    print('\n\n\n')
+    return True,pro,dur
+
+
+def durbest_pro(tmpsol):
+    global W_bp,theta,eta,bp_tw,W_bp_arr,theta_arr,eta_arr
+    global pickup, delivery, dis, num_pair
+    global pick, P, W_sum, pick_pos, F, LTW, ETW, num
+
+    W_bp, theta, eta, bp_tw, W_bp_arr, theta_arr, eta_arr = getseg()
+    pickup, delivery, dis, num_pair = seginit()
+    pick, P, W_sum = [-1 for _ in range(num_pair + 1)], [-1 for _ in range(num_pair + 1)], [1000000 for _ in
+                                                                                            range(2 * num_pair + 2)]
+    # pick_pos: x请求pickup点在路径第j个位置，  pick:第x个被pick点在路径第y位置  P：x号请求的ride time      W_sum: 后缀waiting time和
+    pick_pos, F = [-1 for _ in range(num_pair + 1)], [1000000 for _ in range(2 * num_pair + 2)]
+    LTW, ETW = [860 for _ in range(2 * num_pair + 2)], [0 for _ in range(2 * num_pair + 2)]
+    PP = 0
+
+    for i in range(1, len(tmpsol)):
+        if tmpsol[i][0] >= 1 and tmpsol[i][0] <= num_pair:
+            PP += 40 + 0.1 * dis[i][i + num_pair]  #############################################################
+    # print(PP)
+    # print(80 - (dis[5][15] + dis[7][17]) * 0.1)
+
+    num = len(tmpsol) / 2 - 1
+    # 不同的从仓库起始的时间中最好的profit， 通过所有breakpoint
+    curList = depot_bp(tmpsol)
+    # print("curList : ", curList)
+
+    pro, dur, BB = -1000000, 1000000, [1000000 for _ in range(2 * num_pair + 2)]
+    for i in range(len(curList)):
+        st = curList[i]  # A: arrival time; B:departure time; W:waiting time
+        A, W, B = [1000000 for _ in range(2 * num_pair + 2)], [1000000 for _ in range(2 * num_pair + 2)], [1000000 for _
+                                                                                                           in range(
+                2 * num_pair + 2)]
+        A[0], B[0], W[0] = st, st, 0
+        flag, P, pick, cntp = 0, [-1 for _ in range(num_pair + 1)], [-1 for _ in range(num_pair + 1)], 0
+        for j in range(len(tmpsol) - 1):
+            if tmpsol[j + 1][0] == 2 * num_pair + 1:
+                e, l = 0, 840
+            elif tmpsol[j + 1][0] > num_pair:
+                e = delivery[tmpsol[j + 1][0] - num_pair]["etw"]
+                l = delivery[tmpsol[j + 1][0] - num_pair]["ltw"]
+            else:
+                e = pickup[tmpsol[j + 1][0]]["etw"]
+                l = pickup[tmpsol[j + 1][0]]["ltw"]
+                pick_pos[tmpsol[j + 1][0]] = j + 1
+                pick[cntp] = j + 1
+                cntp += 1
+            cur_node, next_node = tmpsol[j][0], tmpsol[j + 1][0]
+            for k in range(1, 9):
+                if W_bp[cur_node][next_node][k] > st:
+                    break
+            Tao = theta[cur_node][next_node][k - 1] * st + eta[cur_node][next_node][k - 1]
+            if Tao + st > l:
+                # print("e,l = ",tmpsol[j+1][0],e,l,j+1,Tao+st)
+                flag = 1
+                break
+            A[tmpsol[j + 1][0]] = st + Tao
+            if Tao + st < e:
+                W[tmpsol[j + 1][0]] = e - Tao - st
+                st, B[tmpsol[j + 1][0]] = e, e
+            else:
+                B[tmpsol[j + 1][0]] = Tao + st
+                st, W[tmpsol[j + 1][0]] = Tao + st, 0
+            if tmpsol[j + 1][0] > num_pair and tmpsol[j + 1][0] != 2 * num_pair + 1:
+                # print("j = ",j,tmpsol[j+1][0])
+                P[tmpsol[j + 1][0] - num_pair] = B[tmpsol[j + 1][0]] - B[tmpsol[j + 1][0] - num_pair]
+            # print(i,"  ",curList[i],st)
+        if flag == 1:
+            continue
+
+        ck, d1, B = Forward_slack(tmpsol, A, B, W, cntp)
+        if ck == True and pro < PP - d1:
+            pro = PP - d1
+            dur = d1
+            BB = B
+    return BB
+#tmpsol = [[0,0], [11,0], [26,0],[ 5,0], [20,0], [7,0], [22,0], [31,0]]
+#print(best_pro(tmpsol))
+#if __name__=='__main__':
+ #   print("")
